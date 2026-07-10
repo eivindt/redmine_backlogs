@@ -18,7 +18,10 @@ RB.Model = RB.Object.create({
 
   afterSave: function(data, textStatus, xhr){
     var isNew = this.isNew();
-    var result = RB.Factory.initialize(RB.Model, data);
+    var result = RB.Factory.initialize(
+      RB.Model,
+      RB.$(RB.$.trim(data)).filter('.model').first()
+    );
     this.unmarkSaving();
     this.refresh(result);
     if(isNew){
