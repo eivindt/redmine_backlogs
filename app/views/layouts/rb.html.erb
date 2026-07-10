@@ -38,11 +38,6 @@ RB.$(function(){
     //fix around jquery sortable offset problems when page is scrolled down.
     document.getElementsByTagName('html')[0].style.overflowY = 'inherit';
   }} catch(e){}
-
-  /* provide the possibility to collapse the redmine header */
-  RB.$('#usability-compat-wrapper').bind('dblclick', function(e,u){
-    RB.$('#usability-compat-wrapper').toggleClass('w-rb-header-collapsed');
-  });
 });
 
 <%# redmine-core requires the script below %>
@@ -67,11 +62,8 @@ function toggleNewObjectDropdown() {
 </head>
 <body class="<%=h body_css_classes if Backlogs.setting[:show_redmine_std_header] %>">
 <div id="wrapper">
-<div id="wrapper2">
-<div id="wrapper3">
 <% if Backlogs.setting[:show_redmine_std_header] %>
-<div id="usability-compat-wrapper">
-<div id="top-menu" title="Doubleclick to collapse">
+<div id="top-menu">
     <div id="account">
         <%= render_menu :account_menu -%>
     </div>
@@ -103,7 +95,6 @@ function toggleNewObjectDropdown() {
         <%= render_main_menu(@project) %>
     </div>
     <% end %>
-</div>
 </div>
 <% end %>
 
@@ -141,8 +132,6 @@ function toggleNewObjectDropdown() {
   <div id="helpers">
     <%= yield :helpers %>
   </div>
-</div>
-</div>
 </div>
 </body>
 </html>
