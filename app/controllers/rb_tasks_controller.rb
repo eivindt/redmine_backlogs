@@ -12,7 +12,8 @@ class RbTasksController < RbApplicationController
     rescue => e
       Rails.logger.error(e.to_yaml)
       Rails.logger.error(e.backtrace)
-      render :text => e.message.blank? ? e.to_s : e.message, :status => 400
+      render :partial => "backlogs/model_errors", :object => { "base" => e.message.blank? ? e.to_s : e.message }, :status => 400
+
       return
     end
 
@@ -29,8 +30,17 @@ class RbTasksController < RbApplicationController
     params.permit!
     @task = RbTask.find_by_id(params[:id])
     @settings = Backlogs.setting
-    result = @task.update_with_relationships(params)
-    status = (result ? 200 : 400)
+    status = nil
+    begin
+      result = @task.update_with_relationships(params)
+      status = (result ? 200 : 400)
+    rescue => e
+      Rails.logger.error(e.to_yaml)
+      Rails.logger.error(e.backtrace)
+      render :partial => "backlogs/model_errors", :object => { "base" => e.message.blank? ? e.to_s : e.message }, :status => 400
+      return
+    end
+
     @include_meta = true
 
     @task.story.story_follow_task_state if @task.story
