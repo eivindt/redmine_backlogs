@@ -1,0 +1,343 @@
+-- Read-only export of one Redmine project tree plus all redmine_backlogs data
+-- as CSV files, for loading into a test database.
+--
+-- Usage (run inside an empty directory, psql 12 or newer):
+--
+--   mkdir backlogs_export && cd backlogs_export
+--   psql -h HOST -U USER -d DBNAME -v ident=PROJECT_IDENTIFIER -f /path/to/export_backlogs_project.psql
+--   tar czf ../backlogs_export.tgz *.csv
+--
+-- Everything runs inside a READ ONLY transaction that is rolled back at the
+-- end, so nothing in the database is modified. Passwords, salts and e-mail
+-- addresses are not exported. Attachments are not exported.
+
+\set ON_ERROR_STOP on
+
+\if :{?ident}
+\else
+  \echo 'ERROR: pass the project identifier with  -v ident=PROJECT_IDENTIFIER'
+  \quit
+\endif
+
+SELECT :VERSION_NUM >= 120000 AS psql_ok \gset
+\if :psql_ok
+\else
+  \echo 'ERROR: psql 12 or newer is required (CSV output format)'
+  \quit
+\endif
+
+BEGIN;
+SET TRANSACTION READ ONLY;
+
+SELECT count(*) = 1 AS found FROM projects WHERE identifier = :'ident' \gset
+\if :found
+\else
+  \echo 'ERROR: no project with identifier' :'ident'
+  \quit
+\endif
+
+-- Nested-set bounds of the project tree (project + subprojects)
+SELECT lft AS root_lft, rgt AS root_rgt, id AS root_id FROM projects WHERE identifier = :'ident' \gset
+
+\pset format csv
+\pset tuples_only off
+\pset footer off
+
+------------------------------------------------------------------------
+-- Metadata, used to verify the schema state before import
+------------------------------------------------------------------------
+\o exp_server_version.csv
+SELECT version() AS server_version, now() AS exported_at, :'ident' AS project_identifier;
+\o
+
+\o exp_schema_migrations.csv
+SELECT version FROM schema_migrations ORDER BY version;
+\o
+
+------------------------------------------------------------------------
+-- Global reference data (small tables, exported completely)
+------------------------------------------------------------------------
+\o exp_trackers.csv
+SELECT * FROM trackers ORDER BY id;
+\o
+
+\o exp_issue_statuses.csv
+SELECT * FROM issue_statuses ORDER BY id;
+\o
+
+\o exp_enumerations.csv
+SELECT * FROM enumerations ORDER BY id;
+\o
+
+\o exp_roles.csv
+SELECT * FROM roles ORDER BY id;
+\o
+
+\o exp_workflows.csv
+SELECT * FROM workflows ORDER BY id;
+\o
+
+\o exp_custom_fields.csv
+SELECT * FROM custom_fields ORDER BY id;
+\o
+
+\o exp_custom_fields_trackers.csv
+SELECT * FROM custom_fields_trackers;
+\o
+
+\o exp_settings.csv
+SELECT * FROM settings WHERE name LIKE 'plugin_redmine_backlogs%' ORDER BY id;
+\o
+
+------------------------------------------------------------------------
+-- Project tree
+------------------------------------------------------------------------
+\o exp_projects.csv
+SELECT * FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt ORDER BY id;
+\o
+
+\o exp_enabled_modules.csv
+SELECT * FROM enabled_modules
+ WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt)
+ ORDER BY id;
+\o
+
+\o exp_projects_trackers.csv
+SELECT * FROM projects_trackers
+ WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt);
+\o
+
+\o exp_custom_fields_projects.csv
+SELECT * FROM custom_fields_projects
+ WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt);
+\o
+
+\o exp_members.csv
+SELECT * FROM members
+ WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt)
+ ORDER BY id;
+\o
+
+\o exp_member_roles.csv
+SELECT * FROM member_roles
+ WHERE member_id IN (SELECT id FROM members
+                      WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt))
+ ORDER BY id;
+\o
+
+\o exp_rb_project_settings.csv
+SELECT * FROM rb_project_settings
+ WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt)
+ ORDER BY id;
+\o
+
+------------------------------------------------------------------------
+-- Issues: every issue in the tree, plus whole nested sets they belong to
+-- (so cross-project parent/child chains stay intact)
+------------------------------------------------------------------------
+\o exp_issues.csv
+SELECT * FROM issues
+ WHERE root_id IN (SELECT DISTINCT root_id FROM issues
+                    WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt))
+ ORDER BY id;
+\o
+
+-- Impediments are "blocks" relations. Only relations with both ends inside
+-- the exported issue set are taken; a relation to an issue that is not
+-- exported would crash the plugin (continued_story? looks the other end up).
+\o exp_issue_relations.csv
+SELECT * FROM issue_relations
+ WHERE issue_from_id IN (SELECT id FROM issues
+                          WHERE root_id IN (SELECT DISTINCT root_id FROM issues
+                                             WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt)))
+   AND issue_to_id   IN (SELECT id FROM issues
+                          WHERE root_id IN (SELECT DISTINCT root_id FROM issues
+                                             WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt)))
+ ORDER BY id;
+\o
+
+\o exp_custom_values.csv
+SELECT * FROM custom_values
+ WHERE (customized_type = 'Issue'
+        AND customized_id IN (SELECT id FROM issues
+                               WHERE root_id IN (SELECT DISTINCT root_id FROM issues
+                                                  WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt))))
+    OR (customized_type IN ('Project', 'Version')
+        AND customized_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt))
+ ORDER BY id;
+\o
+
+\o exp_journals.csv
+SELECT * FROM journals
+ WHERE journalized_type = 'Issue'
+   AND journalized_id IN (SELECT id FROM issues
+                           WHERE root_id IN (SELECT DISTINCT root_id FROM issues
+                                              WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt)))
+ ORDER BY id;
+\o
+
+\o exp_journal_details.csv
+SELECT * FROM journal_details
+ WHERE journal_id IN (SELECT id FROM journals
+                       WHERE journalized_type = 'Issue'
+                         AND journalized_id IN (SELECT id FROM issues
+                                                 WHERE root_id IN (SELECT DISTINCT root_id FROM issues
+                                                                    WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt))))
+ ORDER BY id;
+\o
+
+\o exp_time_entries.csv
+SELECT * FROM time_entries
+ WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt)
+ ORDER BY id;
+\o
+
+\o exp_rb_issue_history.csv
+SELECT * FROM rb_issue_history
+ WHERE issue_id IN (SELECT id FROM issues
+                     WHERE root_id IN (SELECT DISTINCT root_id FROM issues
+                                        WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt)))
+ ORDER BY id;
+\o
+
+------------------------------------------------------------------------
+-- Sprints (versions) and releases, including shared ones referenced by
+-- the exported issues
+------------------------------------------------------------------------
+\o exp_versions.csv
+SELECT * FROM versions
+ WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt)
+    OR id IN (SELECT fixed_version_id FROM issues
+               WHERE fixed_version_id IS NOT NULL
+                 AND root_id IN (SELECT DISTINCT root_id FROM issues
+                                  WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt)))
+ ORDER BY id;
+\o
+
+\o exp_rb_sprint_burndown.csv
+SELECT * FROM rb_sprint_burndown
+ WHERE version_id IN (SELECT id FROM versions
+                       WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt)
+                          OR id IN (SELECT fixed_version_id FROM issues
+                                     WHERE fixed_version_id IS NOT NULL
+                                       AND root_id IN (SELECT DISTINCT root_id FROM issues
+                                                        WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt))))
+ ORDER BY id;
+\o
+
+\o exp_releases.csv
+SELECT * FROM releases
+ WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt)
+    OR id IN (SELECT release_id FROM issues
+               WHERE release_id IS NOT NULL
+                 AND root_id IN (SELECT DISTINCT root_id FROM issues
+                                  WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt)))
+ ORDER BY id;
+\o
+
+\o exp_rb_release_burnchart_day_caches.csv
+SELECT * FROM rb_release_burnchart_day_caches
+ WHERE release_id IN (SELECT id FROM releases
+                       WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt)
+                          OR id IN (SELECT release_id FROM issues
+                                     WHERE release_id IS NOT NULL
+                                       AND root_id IN (SELECT DISTINCT root_id FROM issues
+                                                        WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt))))
+ ORDER BY release_id, issue_id, day;
+\o
+
+\o exp_rb_releases_multiview.csv
+SELECT * FROM rb_releases_multiview
+ WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt)
+ ORDER BY id;
+\o
+
+------------------------------------------------------------------------
+-- Sprint wiki pages
+------------------------------------------------------------------------
+\o exp_wikis.csv
+SELECT * FROM wikis
+ WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt)
+ ORDER BY id;
+\o
+
+\o exp_wiki_pages.csv
+SELECT * FROM wiki_pages
+ WHERE wiki_id IN (SELECT id FROM wikis
+                    WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt))
+ ORDER BY id;
+\o
+
+\o exp_wiki_contents.csv
+SELECT * FROM wiki_contents
+ WHERE page_id IN (SELECT id FROM wiki_pages
+                    WHERE wiki_id IN (SELECT id FROM wikis
+                                       WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt)))
+ ORDER BY id;
+\o
+
+------------------------------------------------------------------------
+-- Users and groups referenced by the data above. Credentials are blanked
+-- and no e-mail addresses are exported. Uncomment the two lines marked
+-- ANON to also replace names.
+------------------------------------------------------------------------
+\o exp_users.csv
+SELECT u.id, u.login,
+       'disabled' AS hashed_password,
+       u.firstname,                                    -- ANON: replace with  'User' AS firstname,
+       u.lastname,                                     -- ANON: replace with  u.id::text AS lastname,
+       u.admin, u.status, u.last_login_on, u.language,
+       NULL::integer AS auth_source_id,
+       u.created_on, u.updated_on, u.type, u.identity_url, u.mail_notification,
+       NULL::varchar AS salt,
+       u.must_change_passwd, u.passwd_changed_on
+  FROM users u
+ WHERE u.id IN (
+         SELECT author_id FROM issues
+          WHERE root_id IN (SELECT DISTINCT root_id FROM issues
+                             WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt))
+         UNION
+         SELECT assigned_to_id FROM issues
+          WHERE assigned_to_id IS NOT NULL
+            AND root_id IN (SELECT DISTINCT root_id FROM issues
+                             WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt))
+         UNION
+         SELECT user_id FROM members
+          WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt)
+         UNION
+         SELECT user_id FROM journals
+          WHERE journalized_type = 'Issue'
+            AND journalized_id IN (SELECT id FROM issues
+                                    WHERE root_id IN (SELECT DISTINCT root_id FROM issues
+                                                       WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt)))
+         UNION
+         SELECT user_id FROM time_entries
+          WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt)
+         UNION
+         SELECT author_id FROM wiki_contents
+          WHERE page_id IN (SELECT id FROM wiki_pages
+                             WHERE wiki_id IN (SELECT id FROM wikis
+                                                WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt)))
+       )
+ ORDER BY u.id;
+\o
+
+------------------------------------------------------------------------
+-- Summary on screen
+------------------------------------------------------------------------
+\pset format aligned
+\pset footer on
+
+SELECT 'projects'  AS tbl, count(*) FROM projects  WHERE lft >= :root_lft AND rgt <= :root_rgt
+UNION ALL SELECT 'issues',    count(*) FROM issues    WHERE root_id IN (SELECT DISTINCT root_id FROM issues WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt))
+UNION ALL SELECT 'versions',  count(*) FROM versions  WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt)
+UNION ALL SELECT 'releases',  count(*) FROM releases  WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt)
+UNION ALL SELECT 'rb_issue_history', count(*) FROM rb_issue_history WHERE issue_id IN (SELECT id FROM issues WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt))
+UNION ALL SELECT 'rb_sprint_burndown', count(*) FROM rb_sprint_burndown WHERE version_id IN (SELECT id FROM versions WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt))
+UNION ALL SELECT 'rb_release_burnchart_day_caches', count(*) FROM rb_release_burnchart_day_caches WHERE release_id IN (SELECT id FROM releases WHERE project_id IN (SELECT id FROM projects WHERE lft >= :root_lft AND rgt <= :root_rgt))
+UNION ALL SELECT 'plugin migrations applied', count(*) FROM schema_migrations WHERE version LIKE '%-redmine_backlogs';
+
+ROLLBACK;
+
+\echo
+\echo 'Done. Now run:  tar czf ../backlogs_export.tgz *.csv'
