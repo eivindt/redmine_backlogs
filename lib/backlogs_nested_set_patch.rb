@@ -131,9 +131,10 @@ module BacklogsNestedSetPatch
     end
 
     def case_condition_for_parent
-      "issues.parent_id = CASE " +
-        "WHEN issues.id = :primary_id THEN :new_parent_id " +
-        "ELSE issues.parent_id END"
+      # The SET target must not be qualified with the table name (PostgreSQL rejects it)
+      "parent_id = CASE " +
+        "WHEN id = :primary_id THEN :new_parent_id " +
+        "ELSE parent_id END"
     end
   end
 end

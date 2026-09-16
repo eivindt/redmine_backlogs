@@ -166,19 +166,16 @@ module BacklogsIssuePatch
           # raw sql and manual journal here because not
           # doing so causes an update loop when Issue calls
           # update_parent :<
-          tasklist = RbTask.where("root_id=? and lft>? and rgt<? and
-                                          (
-                                            (? is NULL and not fixed_version_id is NULL)
-                                            or
-                                            (not ? is NULL and fixed_version_id is NULL)
-                                            or
-                                            (not ? is NULL and not fixed_version_id is NULL and ?<>fixed_version_id)
-                                            or
-                                            (tracker_id <> ?)
-                                          )", self.root_id, self.lft, self.rgt,
-                                              self.fixed_version_id, self.fixed_version_id,
-                                              self.fixed_version_id, self.fixed_version_id,
-                                              RbTask.tracker).all.to_a
+          # Tasks below this story whose sprint or tracker no longer matches the story.
+          # The sprint comparison is built in Ruby: a nil bind parameter compared with
+          # "IS NULL" has no type for PostgreSQL under Rails 8.
+          sprint_mismatch = if self.fixed_version_id.nil?
+                              "fixed_version_id IS NOT NULL"
+                            else
+                              "(fixed_version_id IS NULL OR fixed_version_id <> #{self.fixed_version_id.to_i})"
+                            end
+          tasklist = RbTask.where("root_id = ? AND lft > ? AND rgt < ? AND (#{sprint_mismatch} OR tracker_id <> ?)",
+                                  self.root_id, self.lft, self.rgt, RbTask.tracker).to_a
           tasklist.each{|task| task.history.save! }
           if tasklist.size > 0
             task_ids = '(' + tasklist.collect{|task| self.class.connection.quote(task.id)}.join(',') + ')'
