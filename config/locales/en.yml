@@ -103,6 +103,8 @@ en:
   field_release_start_date: "Release start date"
   field_remaining_hours: "Remaining (hours)"
   field_story_points: "Story points"
+  field_sprint_start_date: "Sprint start date"
+  field_status_id: "Status"
   field_subject: Subject
   field_task_color: "Task color"
   field_time_entry_comments: "Time Entry Comments"
