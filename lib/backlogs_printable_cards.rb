@@ -277,7 +277,7 @@ module BacklogsPrintableCards
       f = nil
       ['-default', ''].each {|postfix|
         t = File.dirname(__FILE__) + "/labels/#{template}#{postfix}.glabels"
-        f = t if File.exists?(t)
+        f = t if File.exist?(t)
       }
       raise "No template for #{template}" unless f
       label = Nokogiri::XML(Zlib::GzipReader.open(f))
