@@ -243,7 +243,7 @@ module BacklogsPlugin
                                   url_for_prefix_in_hooks + bulk_update_issues_path(:ids => issues, :issue => {:release_id => s}, :back_url => context[:back]),
                                   :method => :post,
                                   :selected => (issue && s == issue.release),
-                                  :disabled => !context[:can][:update])+
+                                  :disabled => !context[:can][:edit])+
               '</li>'
           end
           snippet += '<li>' +
@@ -251,7 +251,7 @@ module BacklogsPlugin
                                   url_for_prefix_in_hooks + bulk_update_issues_path(:ids => issues, :issue => {:release_id => 'none'}, :back_url => context[:back]),
                                   :method => :post,
                                   :selected => (issue && issue.release.nil?),
-                                  :disabled => !context[:can][:update])+
+                                  :disabled => !context[:can][:edit])+
             '</li>'
           snippet += '
               </ul>
