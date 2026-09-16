@@ -10,7 +10,8 @@ class RbTasksController < RbApplicationController
     begin
       @task  = RbTask.create_with_relationships(params, User.current.id, @project.id)
     rescue => e
-      render :plain => e.message.blank? ? e.to_s : e.message, :status => 400
+      Rails.logger.error("#{e.class}: #{e.message}\n#{e.backtrace.join("\n")}")
+      render :partial => "backlogs/model_errors", :object => { "base" => e.message.blank? ? e.to_s : e.message }, :status => 400
       return
     end
 
@@ -31,7 +32,13 @@ class RbTasksController < RbApplicationController
       return
     end
     @settings = Backlogs.settings
-    result = @task.update_with_relationships(params)
+    begin
+      result = @task.update_with_relationships(params)
+    rescue => e
+      Rails.logger.error("#{e.class}: #{e.message}\n#{e.backtrace.join("\n")}")
+      render :partial => "backlogs/model_errors", :object => { "base" => e.message.blank? ? e.to_s : e.message }, :status => 400
+      return
+    end
     status = (result ? 200 : 400)
     @include_meta = true
 
